@@ -1,0 +1,565 @@
+---
+title: "Gendered Humor: A Text Mining Analysis of Sentiment, Language, and Topics in American Stand-Up Comedy"
+author: Paloma Navarro and Gaspar Vigneaux
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-float: true
+---
+
+
+# Introduction
+This project uses text mining techniques to explore if female and male comedians differ in their language use in stand-up monologues. By applying different text mining techniques, we explore the words they use, the emotional tone and the topics they use. We apply three methods: TF-IDF to identify the distinctive vocabulary per comedian, sentiment analysis to measure the emotional register of each monologue and topic modelling to identify the themes. 
+By selecting female and male in the same ratio, we want to  explore if gender has an impact on the way of making comedy.
+
+## Libraries
+```{r} 
+library(tidytext)
+library(tidyverse)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(wordcloud)
+library(topicmodels)
+library(textstem)# for lemmatization 
+library(ggplot2)
+```
+
+# Data
+```{r}
+standup <- read.csv("scripts_standup.csv") |> 
+  select(Name, Gender = Gender.1.female., Script) |> 
+  filter(!is.na(Name) & Name != "")
+```
+For this project, we built our own dataset by collecting stand-up comedy scripts from the website Scraps From the Loft (https://scrapsfromtheloft.com/stand-up-comedy-scripts/). We selected a total of ten comedians, including five women and five men, all with Netflix specials between 2019-2024. For each comedian, one monologue was 
+downloaded and included in the dataset. 
+**Women**: Chelsea Handler, Fortune Feimster, Iliza Shlesinger, Michelle Wolf, Sarah Silverman
+**Men**: Ari Shaffir, Bert Kresicher, Gabriel Iglesias, Jamie Foxx, Ronny Chieng
+
+## Cleaning Data
+```{r}
+standup <- standup |> 
+  mutate(Script = str_remove_all(Script, "\\[.*?\\]")) 
+
+tokens <- standup |> 
+  unnest_tokens(word, Script) #tokenizing
+
+## Adding filler words, and words that are too general
+new_stopwords <- tibble(word = c(
+  "yeah", "oh", "ah",
+  "gonna", "wanna", "gotta",
+  "like", "youre", "dont", "im", "ive",
+  "time", "people", "thing", "lot",
+  "guy", "guys", "something", "anything",
+  "really", "actually", "basically", "didn", "couldn", "don","ll", "ve", "hey"
+))
+
+stop_words <- bind_rows(stop_words, new_stopwords)
+
+
+stand_up_clean <- tokens |> 
+  anti_join(stop_words)# filtering stopwords
+
+#filtering words between brackets
+
+head(stand_up_clean)
+```
+During the data cleaning process, we first removed annotations or contextual elements enclosed in brackets, as they were not part of the monologue itself, but comments of the context (such as laughter or applause).
+
+Next we tokenized the text into individual words using tidytext. This is done to infer on each word specifically.
+
+Lastly, we created our own custom_stop_words list. This include filler words, contractions and general terms that appeared frequently in the scripts but did not provide meaningful analytical value for the content analysis of the monologues. These custom stopwords helps to reduce noise in the dataset and helps the reader to only focus on the important words of the monologues. 
+
+# Count Frequency and TF-IDF
+
+The first method we applied to analyze  of stand-up monologues is Term Frequency-Inverse Document Frequency (TF-IDF). This was used to identify words that are particularly important within each monologue in relation to the entire corpus (all ten scripts). A high TF-IDF score means the word is characteristic of that particular comedian, not just stand-up comedy in general.
+
+## What words do comediants use the most?
+```{r, echo=TRUE, results="hide"}
+stand_up_lemma <- stand_up_clean |>
+  mutate(word = lemmatize_words(word))
+
+# lemmatized version for frequency analysis and topic modelling
+# stand_up_clean is kept intact for sentiment analysis
+
+stand_up_lemma |> 
+  count(word, sort = TRUE)
+
+monologues_words <- stand_up_lemma |> 
+  group_by(Name) |> 
+  count(word, sort = TRUE)
+
+monologues_tfidf <- monologues_words |>
+  bind_tf_idf(word, Name, n)
+```
+
+## What words do each comediant use more?
+
+```{r}
+monologues_tfidf |>
+  group_by(Name) |>
+  slice_max(n, n = 10) |>
+  arrange(Name, desc(n)) #what words do they say more
+
+monologues_tfidf |>
+  group_by(Name) |>
+  slice_max(n, n = 5) |>
+  arrange(Name, desc(n)) |>
+  ggplot(aes(x = reorder_within(word, n, Name), y = n, fill = Name)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Name, scales = "free") +
+  scale_x_reordered() +
+  coord_flip() +
+  labs(x = NULL, y = "Frequency", title = "Top 10 words per comedian") +
+  theme_minimal()
+```
+To start the TF-IDF analysis, we examine the most frequent words used by each comedian individually. As we can see, each comedian tends to use a distinct vocabulary, which already suggests that stand-up humor is highly personal.  Some comedians rely more on narrative language, while others emphasize punchlines and curse-words. 
+
+## Most used words by gender
+```{r}
+monologues_tfidf |>
+  left_join(stand_up_clean |> distinct(Name, Gender), by = "Name") |>
+  mutate(Gender = ifelse(Gender == 1, "Women", "Men")) |>
+  group_by(Gender, word) |>
+  summarise(n = sum(n)) |>
+  group_by(Gender) |>
+  slice_max(n, n = 10) |>
+  arrange(Gender, desc(n)) |>
+  ggplot(aes(x = reorder_within(word, n, Gender), y = n, fill = Gender)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Gender, scales = "free_y") +
+  scale_x_reordered() +
+  coord_flip() +
+  labs(x = NULL, y = "Frequency", title = "Top 10 most used words by gender") +
+  theme_minimal()
+```
+As it was introduced, part of our focus is to understand if there are gender differences in comedy. When we compare word frequencies by gender, we can see some patterns. Both groups share certain high-frequency words ("uh", "love" and "fu*k" appear prominently in both lists) suggesting that some aspects of stand-up language are relatively universal. 
+However, differences emerge. Female comedians tend to use words such as "mom", "baby", "dad" and "woman", more associated with family roles and relationships. By contrast, male comedians show higher frequencies of curse words such as "fuck", "shit". 
+The results suggests tendencies rather than fixed categories. In general, men and women share a wide range of common high frequency words in their monologues. 
+
+## What words characterize each comediant?
+
+```{r}
+
+monologues_tfidf |>
+  group_by(Name) |>
+  slice_max(tf_idf, n = 5) |>
+  arrange(Name, desc(tf_idf)) |>
+  ggplot(aes(x = reorder_within(word, tf_idf, Name), y = tf_idf, fill = Name)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Name, scales = "free_y") +
+  scale_x_reordered() +
+  coord_flip() +
+  labs(x = NULL, y = "TF-IDF", title = "Most characteristic words per comedian") +
+  theme_minimal()
+```
+
+We explore words that are particularly distinctive for each comedian. The results reveal that each comedian has a unique linguistic signature, often centered around specific themes or recurring personal topics.
+In the plots, we observe that there are highly distinctive and original words associated with each performer. This suggests that each monologue reflects a different narrative style and comedic approach.
+Overall, these findings reinforce the idea that humor is highly individual, where each performer constructs a unique vocabulary around their own life and perspective.
+
+## What words characterize each gender's humor?
+```{r}
+monologues_tfidf |>
+  # join gender info
+  left_join(stand_up_clean |> distinct(Name, Gender), by = "Name") |>
+  mutate(Gender = ifelse(Gender == 1, "Women", "Men")) |>
+  # average tf-idf per word per gender across comedians
+  group_by(Gender, word) |>
+  summarise(mean_tf_idf = mean(tf_idf)) |>
+  group_by(Gender) |>
+  slice_max(mean_tf_idf, n = 10) |>
+  arrange(Gender, desc(mean_tf_idf)) |>
+  ggplot(aes(x = reorder_within(word, mean_tf_idf, Gender), y = mean_tf_idf, fill = Gender)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Gender, scales = "free_y") +
+  scale_x_reordered() +
+  coord_flip() +
+  labs(x = NULL, y = "Mean TF-IDF", title = "Most characteristic words by gender") +
+  theme_minimal()
+```
+The TF-IDF analysis highlights the words that are most distinctive for each gender, rather than simply the most frequent. We can see that many words correspond to proper names ("Jamie Foxx", "Janice") or very specific references. These are highly relevant within individual monologues but not widely across all the scripts. This reflects something natural in stand up comedy, often built around specific stories, characters and personal experiencies. 
+
+For male comedians, some of the most distinctive words include highly context-specific terms and slang expressions, such as “n*gga”, suggesting a tendency to incoportate informal language and specific expressions. In contrast, female comedians' distinctive words are tiad to narrative details or characters. 
+
+However, we need to intepret these differences with caution, as TF-IDF tends to highlight unique or infrequent words rather than broad thematic patterns
+
+
+# Sentiment analysis 
+The second method we applied to this project is sentiment analysis. This tells us how those words feel — whether the emotional register of a monologue leans positive or negative, and how that tone shifts over the course of a performance. 
+```{r}
+tidy_standup <- stand_up_clean |> 
+  group_by(Name) |> 
+  mutate(linenumber = row_number()) |> 
+  ungroup()
+
+tidy_standup
+```
+We created tidy_standup by adding a line number per comedian to stand_up_clean, which is used for sentiment analysis. The line number is computed within each comedian's script individually, so that chunks are comparable across scripts.
+
+## Joy + positive words in the monologues 
+```{r}
+#we set nrc lexicon to a variable, filtering by joy and positive
+nrc_joy_positive <- get_sentiments("nrc") |>  
+  filter(sentiment %in% c("joy", "positive"))
+
+scripts_joy_pos_words <- tidy_standup |> 
+    inner_join(nrc_joy_positive)  |> 
+    #we count the mentions of each word to find the most frequent
+    count(word, sort = TRUE)
+
+scripts_joy_pos_words
+```
+## Plotting joy + positive words 
+```{r}
+library(ggplot2)
+
+tidy_standup |> 
+    #we combine both lists, coincident items in NRC and Emma
+  inner_join(nrc_joy_positive) |> 
+    #we count the mentions to see the most frequent words
+  count(word, sort = TRUE) |> 
+    #we filter only words mentioned over 50 times in the novel
+filter(n > 20) |> 
+    #we reorder words by number of mentions
+    mutate(word = reorder(word, n)) |> 
+    #we create the plot with the word (x) and the number of mentions (y)
+    ggplot(aes(x = n, y = word)) +
+    geom_col(fill = "lightgreen") +
+    labs(y = NULL)
+
+```
+As expected, positive and joyful words are widely present in the corpus. Both groups use language associated with these sentiments. 
+The most frequent joy word is love, appearing over 200 times, followed by baby and god. Many of the top words are associated with family relationships and care.
+
+## Negative words in the monologues 
+```{r}
+#we set nrc lexicon to a variable, filtering by joy
+nrc_negative <- get_sentiments("nrc") |>  
+  filter(sentiment == "negative")
+
+scripts_neg_words <- tidy_standup |> 
+    #we combine both lists, NRC and Emma's words
+    inner_join(nrc_negative) |> 
+    #we count the mentions of each word to find the most frequent
+    count(word, sort = TRUE)
+
+scripts_neg_words
+```
+
+## Plotting negative words 
+```{r}
+tidy_standup |> 
+    #we combine both lists, coincident items in NRC and Emma
+  inner_join(nrc_negative) |> 
+    #we count the mentions to see the most frequent words
+  count(word, sort = TRUE) |> 
+    #we filter only words mentioned over 50 times in the novel
+filter(n > 10) |> 
+    #we reorder words by number of mentions
+    mutate(word = reorder(word, n)) |> 
+    #we create the plot with the word (x) and the number of mentions (y)
+    ggplot(aes(x = n, y = word)) +
+    geom_col(fill = "darkred") +
+    labs(y = NULL) 
+``` 
+Negative words are also widely present in the corpus. This is probably related to rhetorical usage of these words to provoke humor. 
+Sentiment lexicons are built for general English text and cannot detect irony or sarcasm. A word like "crazy" or "die" may appear in the lexicon as negative but be used in a clearly comedic context. Probably these words are used in a way to make laugh not explicitly stated. 
+We can also see that the lexicon itself has problems: words like "joke" and "mother" are considered negative when indeed they are not. We acknowledge this as a limitation of the word-level approach.
+
+## Proportion of positive and negative words by gender
+```{r}
+tidy_standup |> 
+  inner_join(get_sentiments("nrc"), by = "word",
+             relationship = "many-to-many") |> 
+  filter(sentiment %in% c("joy", "positive", "negative")) |> 
+  mutate(gender_label = ifelse(Gender == 1, "Women", "Men")) |> 
+  count(gender_label, sentiment) |> 
+  group_by(gender_label) |> 
+  mutate(pct = n / sum(n)) |> 
+  ggplot(aes(x = sentiment, y = pct, fill = gender_label)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("Men" = "#74C0E8", "Women" = "#E87474"),
+                    name = "Gender") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Proportion of joy, positive and negative words by gender",
+    x = NULL, y = "Proportion"
+  ) +
+  theme_minimal()
+```
+Based on the proportions, we can see some patterns: 
+Men use a notably higher proportion of negative words (38%) compared to women (32%), while women score higher on both joy (25% vs 22%) and positive categories (44% vs 41%). This suggests that male comedians rely more heavily on negative language as a comedic device, while female comedians balance negativity with more emotionally warm vocabulary. 
+
+
+## Sentiment distribution in Scripts
+```{r}
+scripts_sentiment <- tidy_standup |> 
+  inner_join(get_sentiments("bing"), by = "word") |> 
+  count(Name, index = linenumber %/% 50, sentiment) |>   
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) |> 
+  mutate(sentiment = positive - negative)
+scripts_sentiment
+```
+We then analyze the distribution of sentiments in each monologue. We use the **Bing** lexicon, which was chosen after we compared with NRC and AFFIN. We divided each monologue in segments of about 50 lines, to enable a more dynamic analysis of how each monologue evolves. A sentiment score for each line is computed, substracting negative words from positive ones. This allows us to track how the emotional tone shifts across the arc of each performance.
+
+### Sentiment distribution in Scripts: women
+```{r}
+# Women
+scripts_sentiment |> 
+  left_join(standup |>  distinct(Name, Gender), by = "Name") |> 
+  mutate(gender_label = ifelse(Gender == 1, "Women", "Men")) |> 
+  filter(gender_label == "Women") |> 
+  ggplot(aes(index, sentiment, fill = Name)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Name, scales = "free_x") +
+  labs(
+    title = "Sentiment arc — Women comedians",
+    x = "Index", y = "Net sentiment"
+  ) +
+  theme_minimal()
+```
+For female comedians, we can see a variation of sentiments across segments, indicating shifts between positive and negative tones in the monologue. 
+This fluctuation suggests a dynamic storytelling style where emotional shifts are used deliberately to build and release tension. 
+The variation of the monologue could explain that there are more emotions and changes involved in the standup. The constant change of sentiment score suggests a change in the structure of the monolgoue, provoking a lot of emotions in short moments. 
+Some monologues are almost entirely negative (Chelsea Handler), while others show a more balanced distribution (Michelle Wolf, Sarah Silverman). Negative sentiment nonetheless dominates overall. 
+
+The use of both positive and negative language suggests that humor is often constructed through contrast, particularly by introducing negative or provocative elements and resolving them humorously.
+
+### Sentiment distribution in Scripts: Men
+```{r}
+# Men
+scripts_sentiment |> 
+  left_join(standup |>  distinct(Name, Gender), by = "Name") |> 
+  mutate(gender_label = ifelse(Gender == 1, "Women", "Men")) |> 
+  filter(gender_label == "Men") |> 
+  ggplot(aes(index, sentiment, fill = Name)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Name, scales = "free_x") +
+  labs(
+    title = "Sentiment arc — Men comedians",
+    x = "Index", y = "Net sentiment"
+  ) +
+  theme_minimal()
+```
+
+For men comedians, the sentiment distribution also shows variation. 
+First of all, male comedians show a more consistently negative sentiment arc. This pattern is consistent with the higher frequency of profanity observed in the TF-IDF section, as the Bing lexicon classifies this curse words as negative.  
+We can see also that the variation is not that abrupt like in the womens. This could be related to a style that relies more on punchlines, or sudden shifts in tone. 
+
+```{r}
+bing_word_counts <- tidy_standup |> 
+  #get sentiment from bing
+  inner_join(get_sentiments("bing")) |> 
+  #count the number of mentions for each word
+  count(word, sentiment, sort = TRUE)
+
+bing_word_counts
+```
+
+
+```{r}
+bing_word_counts |> 
+  group_by(sentiment) |> 
+  slice_max(n, n = 15) |>  
+  ungroup() |> 
+  mutate(word = reorder(word, n)) |> 
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = TRUE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+We count the amount of words in all the monologues and its sentiment. The sentiment signal is heavily driven by profanity. The three largest negative words  fucking, fuck and shit — account for a disproportionate share of the negative score. On the positive side, love dominates overwhelmingly, far ahead of any other word. This asymmetry is important, the negative signal is spread across many expletives, while the positive signal is concentrated in a single word.
+
+## Negative words per comedian
+
+```{r}
+# total words per comedian
+wordcounts <- tidy_standup |> 
+  group_by(Name) |> 
+  summarize(words = n())
+
+wordcounts
+
+# ratio of negative words per comedian
+
+bingnegative <- get_sentiments("bing") |>  
+  filter(sentiment == "negative")
+
+tidy_standup |> 
+  semi_join(bingnegative, by = "word") |> 
+  group_by(Name, Gender) |> 
+  summarize(negativewords = n(), .groups = "drop") |> 
+  left_join(wordcounts, by = "Name") |> 
+  mutate(
+    ratio = negativewords / words
+  ) |> 
+  arrange(desc(ratio))
+```
+
+We did the ratio of negative words for each comedian.
+The three most negative comedians by ratio are all men (Ari Shaffir, Jamie Foxx, Bert Kresicher), and the least negative is a woman (Fortune Feimster). However, the differences are moderate and both genders overlap in the middle of the ranking, suggesting that individual style plays an equally important role alongside gender.
+
+```{r}
+tidy_standup |> 
+  semi_join(bingnegative, by = "word") |> 
+  group_by(Name, Gender) |> 
+  summarize(negativewords = n(), .groups = "drop") |> 
+  left_join(wordcounts, by = "Name") |> 
+  mutate(
+    ratio = negativewords / words,
+    gender_label = ifelse(Gender == 1, "Women", "Men")
+  ) |> 
+  ggplot(aes(x = reorder(Name, ratio), y = ratio, fill = gender_label)) +
+  geom_col() +
+  scale_fill_manual(values = c("Men" = "#74C0E8", "Women" = "#E87474"),
+                    name = "Gender") +
+  coord_flip() +
+  labs(
+    title = "Who is the most negative comedian?",
+    x = NULL, y = "Ratio of negative words"
+  ) +
+  theme_minimal()
+```
+
+
+## Word cloud
+```{r}
+library(reshape2)
+
+word_matrix <- tidy_standup |> 
+  #we get sentiments
+  inner_join(get_sentiments("bing")) |> 
+  #we count word mentions
+  count(word, sentiment, sort = TRUE) |> 
+   #we convert to a matrix: rows = words, columns = sentiments, values = counts (0 if missing)
+  acast(word ~ sentiment, value.var = "n", fill = 0)
+
+head(word_matrix)
+```
+
+```{r}
+comparison.cloud(word_matrix, colors = c("red", "blue"),
+                   max.words = 100)
+```
+
+The wordcloud provides a visual summary of the most frequent positive and negative words in the corpus. 
+
+
+# Topic Modelling
+
+The third and final method we apply is Latent Dirichlet Allocation (LDA). It allows us to identify the main themes present across the different monologues by grouping words that frequently appear together. This also helos us examine whether men and women comedians gravitate toward different themes.
+
+### Adding more stop words
+```{r}
+stopwords_tm <- tibble(word = c("um", "uh", "fuck", "god", "shit", "day", "hear")) #new stop words that are not useful for the topic modelling section. These do not explain much
+
+stop_words_tm <- bind_rows(stop_words, stopwords_tm)
+
+stand_up_lemma <- tokens |> 
+  mutate(word = lemmatize_words(word)) |> 
+  anti_join(stop_words_tm, by = "word")
+
+head(stand_up_lemma)
+```
+
+We provide a larger stop_words list to fairly represent the topics. 
+
+### Preparing the corpus (DTM)
+
+```{r}
+standup_dtm <- stand_up_lemma |>
+  count(Name, word, sort = TRUE) |>
+  cast_dtm(Name, word, n) 
+
+standup_dtm
+```
+
+As we can see by preparing the corpus, the sparsity is not very high,meaning that comedians share a relatively common vocabulary.
+
+## Fitting LDA
+```{r}
+standup_lda <- LDA(standup_dtm, k = 3, control = list(seed = 1234)) # specifying 3 topics
+standup_lda 
+```
+
+## Results
+
+### Most probable words per topic
+```{r}
+standup_topics <- tidy(standup_lda, matrix = "beta") # coefficients of the probability of each word belonging to each topic
+standup_topics 
+
+standup_topics |>
+  group_by(topic) |>
+  slice_max(beta, n = 10) |>
+  ungroup() |>
+  arrange(topic, desc(beta)) |>
+  mutate(term = reorder_within(term, beta, topic)) |>
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered() +
+  labs(x = "Beta", y = NULL, title = "Most probable words per topic") +
+  theme_minimal()
+```
+
+Although stand-up monologues are highly personal, the LDA model identifies three interpretable thematic clusters:
+Topic 1 **Love, Body and Feelings**: is defined by words like woman, love, baby, feel, mom, care and body — a discourse centered on gender, relationships, and bodily experience. 
+Topic 2 **Home and Family** reflects the domestic sphere through words like mom, kid, love, home, car, run and play. 
+Topic 3 **My Story** captures a more first-person narrative style based on personal anecdotes through words like walk, dad, call, start, fly and lose.
+
+
+
+### Comedian-Topic probability
+```{r}
+standup_gamma <- tidy(standup_lda, matrix = "gamma")
+standup_gamma
+
+standup_gamma |>
+  left_join(standup |> distinct(Name, Gender), by = c("document" = "Name")) |>
+mutate(Gender = ifelse(Gender == 1, "Women", "Men"),
+       topic = case_when(
+         topic == 1 ~ "Love, Body & Feelings",
+         topic == 2 ~ "Home & Family",
+         topic == 3 ~ "My Story"
+       )) |>
+  ggplot(aes(x = reorder(document, Gender), y = gamma, fill = topic)) +
+  geom_col() +  # stacked by default
+  facet_wrap(~ Gender, scales = "free_x") +  # split by gender side by side
+  labs(x = NULL, y = "Topic proportion (gamma)",
+       fill = "Topic",
+       title = "Topic distribution per comedian") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Each comedian appears to be assigned almost entirely to a single topic (gamma 1.0), with no meaningful mixture. This is a limitation of LDA when applied to a very small corpus, with only 10 documents, the model does not have enough variation to learn mixed topic distributions and tends to assign each document to one dominant topic.
+
+### Topic distribution by Gender
+```{r}
+standup_gamma |>
+  left_join(standup |> distinct(Name, Gender), by = c("document" = "Name")) |>
+  mutate(Gender = ifelse(Gender == 1, "Women", "Men"),
+         topic = paste0("Topic ", topic)) |>
+  # average gamma by gender and topic
+  group_by(Gender, topic) |>
+  summarise(mean_gamma = mean(gamma)) |>
+  ggplot(aes(x = topic, y = mean_gamma, fill = Gender)) +
+  geom_col(position = "dodge") +
+  labs(x = NULL, y = "Mean topic proportion (gamma)",
+       title = "Topic distribution by gender") +
+  theme_minimal()
+```
+
+The gender-level distribution reveals a meaningful pattern. Women are predominantly associated with Topic 1 (Love, Body and Feelings) and Topic 2 (Home and Family), while men show a strong concentration in Topic 3 (My Story), with a mean gamma of approximately 0.60 compared to only 0.20 for women. This is consistent with the TF-IDF and sentiment analysis findings. 
+
+# Conclusion
+
+We tried to examine whether male and female stand-up comedians differ in their monologues. We could not prove a sharp gender based division, but we found patterns. 
+
+From the TF-IDF analysis we could identify that men's vocabulary is more marked by profanity, while women's is more marked by relational and emotional language. Sentiment analysis confirmed this, as the men monologues are consistently negative. However, individual variation within gender is considerable, meaning that comedy styles matter more than gender. Topic modelling revealed the clearest pattern: women cluster around themes of love, body ad¡nd family, while men concentrate in a first-person narrative. 
+
+We acknowledge that there are limitations in our findings. With only ten comedians, the topic modelling results can be limited. As we mentioned in the sentiment analysis, because lexicons can not identify irony, we could be facing some negative bias. 
+We would like to specify that our conclusions are specifically for american english netflix stand-up and do not represent the genre broadly. 
